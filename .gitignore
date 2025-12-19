@@ -1,0 +1,16 @@
+# PlatformIO internal folders
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VS Code internal folders
+.vscode/.browse.vc.db
+.vscode/.gcc_flags.json
+.vscode/.c_cpp_properties.json
+*~
+*.swp
+*.bak
+
+# OS generated files
+.DS_Store
+Thumbs.db
