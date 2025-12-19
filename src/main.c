@@ -19,25 +19,16 @@
 #include "driver/i2c.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-
+#include "helper.h"
+#include "globals.h"
+#include "ssd1306.h"
+#include "font8x8_basic.h"
+#include "ui_manager.h"
+#include "encoder_manager.h"
+#define PACK8 __attribute__((aligned( __alignof__( uint8_t ) ), packed ))
 static const char *TAG = "BMX160";
 
-/* Configuration ----------------------------------------------------------- */
-#define I2C_PORT        I2C_NUM_0
-#define SDA_PIN         8
-#define SCL_PIN         9
-#define I2C_FREQ_HZ     400000
-#define BMX160_ADDR     0x68   /* default 7-bit address; can be 0x69 */
-#define SSD1306_ADDR    0x3C
 
-#define I2C_TIMEOUT_MS  100
-#define MUTEX_TIMEOUT_MS 5     /* ms to wait for mutex in UI/reader */
-
-/* BMX160 command and expected PMU values */
-#define BMX160_CMD_REG        0x7E
-#define BMX160_CMD_ACC_NORMAL 0x11
-#define BMX160_CMD_GYR_NORMAL 0x15
-#define BMX160_PMU_NORMAL     0x14
 
 /* SSD1306 Command */
 
@@ -95,22 +86,6 @@ static inline esp_err_t bmx160_write_reg(uint8_t reg, uint8_t val)
 static inline esp_err_t SSD1306_write_reg(uint8_t reg, uint8_t val)
 {
     return i2c_write_addr(SSD1306_addr(), reg, val);
-} 
-
-/* Initialize I2C master */
-static void i2c_init(void)
-{
-    i2c_config_t cfg = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = SDA_PIN,
-        .scl_io_num = SCL_PIN,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = I2C_FREQ_HZ,
-    };
-    ESP_ERROR_CHECK(i2c_param_config(I2C_PORT, &cfg));
-    ESP_ERROR_CHECK(i2c_driver_install(I2C_PORT, cfg.mode, 0, 0, 0));
-    ESP_LOGI(TAG, "I2C initialized (SDA=%d SCL=%d)", SDA_PIN, SCL_PIN);
 } 
 
 /* Try to find BMX160 at 0x68 or 0x69 by reading CHIP_ID */
@@ -249,11 +224,6 @@ static const float ACC_TO_G = (1.0f / ACC_LSB_PER_G);
 static const float GYR_LSB_PER_DPS = 16.4f;   /* ±2000dps */
 static const float GYR_TO_DPS = (1.0f / GYR_LSB_PER_DPS);
 
-typedef struct {
-    float x;
-    float y;
-    float z;
-} sensor_xyz_t;
 
 /* parse helpers: sensor data is little-endian LSB first pairs (X_LSB,X_MSB...) */
 static inline sensor_xyz_t parse_gyro(const uint8_t *buf)
@@ -282,25 +252,23 @@ static inline sensor_xyz_t parse_accel(const uint8_t *buf)
     return out;
 }
 
-/* Global sensor storage and synchronization */
-static sensor_xyz_t g_accel = {0};
-static sensor_xyz_t g_gyro = {0};
-static SemaphoreHandle_t g_data_mutex = NULL;
-static SemaphoreHandle_t g_gyro_mutex = NULL;
-static const TickType_t mutex_timeout_ticks = pdMS_TO_TICKS(MUTEX_TIMEOUT_MS);
+/* Global sensor storage and synchronization - REMOVED 'static' */
+sensor_xyz_t g_accel = {0};
+sensor_xyz_t g_gyro = {0};
+SemaphoreHandle_t g_data_mutex = NULL;
+SemaphoreHandle_t g_gyro_mutex = NULL;
 
-/* Counters for instrumentation */
-static uint32_t g_data_take_success = 0;
-static uint32_t g_data_take_fail = 0;
-static uint32_t g_gyro_take_success = 0;
-static uint32_t g_gyro_take_fail = 0;
-
-/* Task handles & simple health flags */
+/* We can keep this static because only main.c needs to see the handles */
 static TaskHandle_t g_ui_handle = NULL;
 static TaskHandle_t g_reader_handle = NULL;
-static volatile bool g_ui_started = false;
 
-
+/* Share these for the UI to display status */
+uint32_t g_data_take_fail = 0;
+uint32_t g_gyro_take_fail = 0;
+uint32_t g_data_take_success = 0;
+uint32_t g_gyro_take_success = 0;
+volatile bool g_ui_started = false;
+static const TickType_t mutex_timeout_ticks = pdMS_TO_TICKS(5);
 void bmx_read_task(void *arg)
 {
     TickType_t last = xTaskGetTickCount();
@@ -462,8 +430,9 @@ static void i2c_scan(void)
 /* ---------------- Main ---------------- */
 void app_main(void)
 {
-    i2c_init();
-
+    app_i2c_init();
+    gpio_install_isr_service(0);
+    encoder_init();
     vTaskDelay(pdMS_TO_TICKS(500));
     if (!bmx160_init()) {
         ESP_LOGW(TAG, "BMX160 init incomplete; continuing anyway");
@@ -516,65 +485,53 @@ void app_main(void)
 
 
 
-void ui_task(void *arg)
-{
-    sensor_xyz_t local_accel = {0};
-    sensor_xyz_t local_gyro = {0};
-    g_ui_started = true; /* mark visible to app_main */
-    TaskHandle_t h = xTaskGetCurrentTaskHandle();
-    ESP_LOGI(TAG, "ui_task: started (task=%p name=%s)", h, pcTaskGetName(h));
+// void ui_task(void *arg)
+// {
+//     sensor_xyz_t local_accel = {0};
+//     sensor_xyz_t local_gyro = {0};
+//     g_ui_started = true; /* mark visible to app_main */
+//     TaskHandle_t h = xTaskGetCurrentTaskHandle();
+//     ESP_LOGI(TAG, "ui_task: started (task=%p name=%s)", h, pcTaskGetName(h));
 
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(60));
+//     for (;;) {
+//         vTaskDelay(pdMS_TO_TICKS(60));
 
-        if (g_data_mutex == NULL || g_gyro_mutex == NULL) {
-            ESP_LOGE(TAG, "ui_task: mutexes not initialized");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
+//         if (g_data_mutex == NULL || g_gyro_mutex == NULL) {
+//             ESP_LOGE(TAG, "ui_task: mutexes not initialized");
+//             vTaskDelay(pdMS_TO_TICKS(1000));
+//             continue;
+//         }
 
-        if (xSemaphoreTake(g_data_mutex, mutex_timeout_ticks) == pdTRUE) {
-            local_accel = g_accel;
-            xSemaphoreGive(g_data_mutex);
-        } else {
-            g_data_take_fail++;
-            ESP_LOGW(TAG, "ui_task: accel data unavailable");
-        }
+//         if (xSemaphoreTake(g_data_mutex, mutex_timeout_ticks) == pdTRUE) {
+//             local_accel = g_accel;
+//             xSemaphoreGive(g_data_mutex);
+//         } else {
+//             g_data_take_fail++;
+//             ESP_LOGW(TAG, "ui_task: accel data unavailable");
+//         }
 
-        if (xSemaphoreTake(g_gyro_mutex, mutex_timeout_ticks) == pdTRUE) {
-            local_gyro = g_gyro;
-            xSemaphoreGive(g_gyro_mutex);
-        } else {
-            g_gyro_take_fail++;
-            ESP_LOGW(TAG, "ui_task: gyro data unavailable");
-        }
+//         if (xSemaphoreTake(g_gyro_mutex, mutex_timeout_ticks) == pdTRUE) {
+//             local_gyro = g_gyro;
+//             xSemaphoreGive(g_gyro_mutex);
+//         } else {
+//             g_gyro_take_fail++;
+//             ESP_LOGW(TAG, "ui_task: gyro data unavailable");
+//         }
 
-        /* TODO: render local_accel / local_gyro to OLED */
-        if (local_accel.x != 0.0f || local_accel.y != 0.0f || local_accel.z != 0.0f ||
-            local_gyro.x != 0.0f || local_gyro.y != 0.0f || local_gyro.z != 0.0f) {
-            ESP_LOGI(TAG, "UI: accel=(%.3f,%.3f,%.3f) gyro=(%.2f,%.2f,%.2f)",
-                local_accel.x, local_accel.y, local_accel.z,
-                local_gyro.x, local_gyro.y, local_gyro.z);
-        } else {
-            ESP_LOGD(TAG, "UI: sample all zeros");
-        }
-    }
-} 
+//         /* TODO: render local_accel / local_gyro to OLED */
 
-void mutex_hog_task(void *arg)
-{
-    if (g_data_mutex == NULL) {
-        vTaskDelete(NULL);
-        return;
-    }
-    for (;;) {
-        if (xSemaphoreTake(g_data_mutex, portMAX_DELAY) == pdTRUE) {
-            vTaskDelay(pdMS_TO_TICKS(500)); /* hold long on purpose */
-            xSemaphoreGive(g_data_mutex);
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
-    }
-}
+
+
+//         if (local_accel.x != 0.0f || local_accel.y != 0.0f || local_accel.z != 0.0f ||
+//             local_gyro.x != 0.0f || local_gyro.y != 0.0f || local_gyro.z != 0.0f) {
+//             ESP_LOGI(TAG, "UI: accel=(%.3f,%.3f,%.3f) gyro=(%.2f,%.2f,%.2f)",
+//                 local_accel.x, local_accel.y, local_accel.z,
+//                 local_gyro.x, local_gyro.y, local_gyro.z);
+//         } else {
+//             ESP_LOGD(TAG, "UI: sample all zeros");
+//         }
+//     }
+// } 
 
 void stats_task(void *arg)
 {

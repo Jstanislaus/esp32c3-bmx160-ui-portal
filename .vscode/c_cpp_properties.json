@@ -172,6 +172,7 @@
                 "C:/Users/Jacob/.platformio/packages/framework-espidf/components/rt/include",
                 "C:/Users/Jacob/.platformio/packages/framework-espidf/components/spiffs/include",
                 "C:/Users/Jacob/.platformio/packages/framework-espidf/components/wifi_provisioning/include",
+                "C:/Users/Jacob/Documents/PlatformIO/Projects/esp32c3-bmx160-ui-portal/lib/ssd1306",
                 ""
             ],
             "browse": {
@@ -341,6 +342,7 @@
                     "C:/Users/Jacob/.platformio/packages/framework-espidf/components/rt/include",
                     "C:/Users/Jacob/.platformio/packages/framework-espidf/components/spiffs/include",
                     "C:/Users/Jacob/.platformio/packages/framework-espidf/components/wifi_provisioning/include",
+                    "C:/Users/Jacob/Documents/PlatformIO/Projects/esp32c3-bmx160-ui-portal/lib/ssd1306",
                     ""
                 ]
             },
