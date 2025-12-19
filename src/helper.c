@@ -1,21 +1,25 @@
-#include "helper.h"      // Fix 1: Added quotes and fixed include syntax
-#include "driver/i2c.h"
-#include "esp_log.h"     // Fix 2: Added missing header for ESP_LOGI
+#include "helper.h"
+#include "driver/i2c_master.h" // FIX: Changed from i2c.h to i2c_master.h
+#include "esp_log.h"
 #include "globals.h"
-// Fix 3: Removed 'static' so app_main can see this function
-void app_i2c_init(void) 
+
+i2c_master_bus_handle_t app_i2c_init(void) 
 {
-    i2c_config_t cfg = {
-        .mode = I2C_MODE_MASTER,
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port = I2C_NUM_0,
         .sda_io_num = SDA_PIN,
         .scl_io_num = SCL_PIN,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = I2C_FREQ_HZ,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
     };
-    ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &cfg));
-    ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, cfg.mode, 0, 0, 0));
+
+    i2c_master_bus_handle_t handle;
     
-    // Ensure TAG is defined (usually at the top of the file)
-    ESP_LOGI("I2C_HELPER", "I2C initialized (SDA=%d SCL=%d)", SDA_PIN, SCL_PIN);
+    // This is the new-style initialization
+    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &handle));
+    
+    ESP_LOGI("I2C_HELPER", "New I2C Driver initialized (SDA=%d SCL=%d)", SDA_PIN, SCL_PIN);
+    
+    return handle; 
 }

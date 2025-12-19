@@ -4,7 +4,7 @@
 typedef enum {
     UI_STATE_ACCEL = 0,
     UI_STATE_GYRO,
-    UI_STATE_STATS,
+    UI_TIME,
     UI_STATE_MAX // Helper to wrap back to 0
 } ui_screen_t;
 
